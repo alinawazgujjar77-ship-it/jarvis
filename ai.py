@@ -1,6 +1,7 @@
 import os
+import copy
 
-from config import GEMINI_API_KEY, OPENAI_API_KEY
+from config import GEMINI_API_KEY, OPENAI_API_KEY, AUTO_WEB_SEARCH_ENABLE
 
 try:
     from google import genai
@@ -11,6 +12,8 @@ try:
     from openai import OpenAI
 except ImportError:
     OpenAI = None
+
+from search import SearchEngine
 
 openai_client = None
 if OpenAI and OPENAI_API_KEY:
@@ -27,6 +30,22 @@ if genai and GEMINI_API_KEY:
     except Exception as e:
         print("Gemini client init error:", e)
         gemini_client = None
+
+
+def _detect_search_intent(text: str) -> bool:
+    if not text:
+        return False
+    t = text.lower()
+    # Basic heuristic: question words or explicit search triggers
+    triggers = ["who", "what", "when", "where", "why", "how", "search for", "google", "look up", "find ", "define ", "tell me about"]
+    for tr in triggers:
+        if tr in t:
+            return True
+    # If it's short command-like queries, don't auto-search
+    if len(t.split()) <= 2:
+        return False
+    return False
+
 
 class AIAgent:
     def __init__(self):
@@ -47,25 +66,43 @@ class AIAgent:
         return response_text
 
     def _generate_response(self):
-        # Prefer OpenAI if available, otherwise try Gemini
-        if openai_client:
-            return self._ask_openai(self.history)
+        # Optionally perform automatic web search when intent detected
+        last_user = self.history[-1]["content"] if self.history and len(self.history) > 0 else ""
+        augmented_history = copy.deepcopy(self.history)
 
-        if gemini_client:
-            return self._ask_gemini(self.history[-1]["content"])
+        try:
+            if AUTO_WEB_SEARCH_ENABLE and _detect_search_intent(last_user):
+                try:
+                    se = SearchEngine()
+                    results = se.search(last_user)
+                    if results:
+                        summary = "\n".join([f"- {r['title']}: {r['link']}" for r in results[:5]])
+                        augmented_history.append({"role": "system", "content": f"Web search results:\n{summary}"})
+                except Exception as e:
+                    # ignore search failures and proceed
+                    print("Search error while augmenting prompt:", e)
 
-        return "AI is not configured. Set OPENAI_API_KEY or GEMINI_API_KEY in config or environment."
+            # Prefer Gemini if available, otherwise OpenAI
+            if gemini_client:
+                return self._ask_gemini(augmented_history)
+
+            if openai_client:
+                return self._ask_openai(augmented_history)
+
+            return "AI is not configured. Set OPENAI_API_KEY or GEMINI_API_KEY in config or environment."
+        except Exception as exc:
+            return f"AI generation error: {exc}"
 
     @staticmethod
     def _ask_openai(history):
         try:
+            # Ensure history is in the expected format for OpenAI client
             response = openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=history,
                 max_tokens=600,
                 temperature=0.7,
             )
-            # response shape can vary between versions; try both common access patterns
             try:
                 return response.choices[0].message.content.strip()
             except Exception:
@@ -74,26 +111,30 @@ class AIAgent:
             return f"OpenAI error: {exc}"
 
     @staticmethod
-    def _ask_gemini(prompt):
+    def _ask_gemini(history):
         try:
-            # Use a more common model name (gemini-1.5) and simpler prompt body
+            # If Gemini client expects a single prompt string, join recent messages
+            # Build a prompt combining system and last user message
+            # This section may need adjustments depending on genai client version
+            recent = history[-6:]
+            prompt_parts = []
+            for m in recent:
+                prompt_parts.append(f"{m['role'].upper()}: {m['content']}")
+            prompt = "\n".join(prompt_parts)
+
             response = gemini_client.models.generate_content(
                 model="gemini-1.5",
-                contents=f"""
-you are Jarvis, an AI assistant.
-Rules:
-- Reply in 1 to 3 short sentences.
-- Maximum 30 words.
-- Do not use Markdown.
-- Do not use bullet points.
-- Speak naturally like Jarvis.
-User: {prompt}
-"""
+                contents=prompt
             )
-            # response may expose .text or another attribute depending on the client version
             text = getattr(response, "text", None)
             if text:
                 return str(text).strip()
             return str(response).strip()
         except Exception as exc:
+            # If Gemini fails and OpenAI is available, fall back
+            if openai_client:
+                try:
+                    return AIAgent._ask_openai(history)
+                except Exception:
+                    pass
             return f"Gemini error: {exc}"

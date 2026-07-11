@@ -3,6 +3,7 @@ from typing import Tuple
 
 from voice import speak, listen
 from tools import utils
+from config import COMMAND_ALLOWLIST, COMMAND_DENYLIST
 
 
 class CommandHandler:
@@ -16,6 +17,29 @@ class CommandHandler:
             return False
         return resp.strip().lower() in ("yes", "y", "sure", "confirm")
 
+    def _is_allowed(self, command: str) -> Tuple[bool, str]:
+        lc = command.lower()
+        # Deny if any denylist substring present
+        for d in COMMAND_DENYLIST:
+            ds = d.strip().lower()
+            if not ds:
+                continue
+            if ds in lc:
+                return False, f"Command contains denied pattern: '{ds}'"
+        # If allowlist present, require at least one allow token
+        if COMMAND_ALLOWLIST:
+            ok = False
+            for a in COMMAND_ALLOWLIST:
+                as_ = a.strip().lower()
+                if not as_:
+                    continue
+                if as_ in lc:
+                    ok = True
+                    break
+            if not ok:
+                return False, "Command not allowed by allowlist."
+        return True, ""
+
     def handle(self, command: str) -> Tuple[bool, str]:
         """
         Handle system/utility commands. Returns (handled: bool, response: str).
@@ -23,6 +47,11 @@ class CommandHandler:
         """
         if not command or not command.strip():
             return True, "No command provided."
+
+        # Safety check
+        allowed, reason = self._is_allowed(command)
+        if not allowed:
+            return True, f"Command blocked for safety: {reason}"
 
         c = command.strip()
         lc = c.lower()

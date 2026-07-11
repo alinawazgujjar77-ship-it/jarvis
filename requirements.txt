@@ -16,3 +16,4 @@ pyperclip
 pyautogui
 pytesseract
 psutil
+pytest
