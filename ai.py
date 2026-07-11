@@ -14,12 +14,19 @@ except ImportError:
 
 openai_client = None
 if OpenAI and OPENAI_API_KEY:
-    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    try:
+        openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    except Exception as e:
+        print("OpenAI client init error:", e)
+        openai_client = None
 
+gemini_client = None
 if genai and GEMINI_API_KEY:
-    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-else:
-    gemini_client = None
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        print("Gemini client init error:", e)
+        gemini_client = None
 
 class AIAgent:
     def __init__(self):
@@ -40,7 +47,8 @@ class AIAgent:
         return response_text
 
     def _generate_response(self):
-        if openai_client and OPENAI_API_KEY:
+        # Prefer OpenAI if available, otherwise try Gemini
+        if openai_client:
             return self._ask_openai(self.history)
 
         if gemini_client:
@@ -57,26 +65,35 @@ class AIAgent:
                 max_tokens=600,
                 temperature=0.7,
             )
-            return response.choices[0].message.content.strip()
+            # response shape can vary between versions; try both common access patterns
+            try:
+                return response.choices[0].message.content.strip()
+            except Exception:
+                return response.choices[0].text.strip()
         except Exception as exc:
             return f"OpenAI error: {exc}"
 
     @staticmethod
     def _ask_gemini(prompt):
         try:
+            # Use a more common model name (gemini-1.5) and simpler prompt body
             response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-1.5",
                 contents=f"""
-                you are Jarvis, an AI assistant.
-                Rules:
-                - Reply in 1 to 3 short sentences.
-                - maximum 30 words.
-                - Do not use Markdown.
-                - Do not use bullet points.
-                - Speat naturally like Jarvis.
-                User: {prompt}""" 
-
+you are Jarvis, an AI assistant.
+Rules:
+- Reply in 1 to 3 short sentences.
+- Maximum 30 words.
+- Do not use Markdown.
+- Do not use bullet points.
+- Speak naturally like Jarvis.
+User: {prompt}
+"""
             )
-            return str(response.text).strip()
+            # response may expose .text or another attribute depending on the client version
+            text = getattr(response, "text", None)
+            if text:
+                return str(text).strip()
+            return str(response).strip()
         except Exception as exc:
             return f"Gemini error: {exc}"
