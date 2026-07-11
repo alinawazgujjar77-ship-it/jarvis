@@ -12,3 +12,6 @@ pvporcupine
 sounddevice
 numpy
 edge-tts
+pyperclip
+pyautogui
+pytesseract
