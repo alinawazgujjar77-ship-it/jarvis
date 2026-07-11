@@ -2,11 +2,13 @@ from voice import speak, listen
 from ai import AIAgent
 from config import ASSISTANT_NAME, USER_NAME, WAKE_WORD, ENABLE_WAKE_WORD, MEMORY_MAX_ITEMS, MEMORY_TTL_DAYS
 from memory.memory import MemoryManager
+from commands.handler import CommandHandler
 
 
 def main():
     agent = AIAgent()
     memory = MemoryManager()
+    cmd_handler = CommandHandler(memory=memory)
 
     # Load previous conversations and greet
     convs = memory.get_conversations(limit=10)
@@ -28,7 +30,6 @@ def main():
                 # Not a wake command; ignore
                 continue
             # Remove wake word from text
-            # Only remove the first occurrence
             idx = lower.find(WAKE_WORD.lower())
             cmd_clean = (cmd_clean[:idx] + cmd_clean[idx + len(WAKE_WORD):]).strip()
             if not cmd_clean:
@@ -45,6 +46,16 @@ def main():
             memory.append_conversation("assistant", f"Goodbye {USER_NAME}.")
             break
 
+        # First, try to handle as a system/utility command
+        handled, response = cmd_handler.handle(cmd_clean)
+        if handled:
+            if response:
+                memory.remember("last_reply", response)
+                memory.append_conversation("assistant", response)
+                speak(response)
+            continue
+
+        # Otherwise, send to AI
         reply = agent.ask(cmd_clean)
         memory.remember("last_reply", reply)
         memory.append_conversation("assistant", reply)
