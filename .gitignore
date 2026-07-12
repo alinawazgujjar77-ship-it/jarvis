@@ -1,19 +1,25 @@
-# Environment
-.env
-.env.local
 *.pyc
 __pycache__/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
-# Data
-data/
-*.db
-*.db-journal
-
-# Logs
-logs/
+.env
+.env.local
 *.log
+logs/
 
-# IDE
+data/jarvis.db
+data/*.png
+data/*.jpg
+data/*.mp3
+
+venv/
+env/
 .vscode/
 .idea/
 *.swp
@@ -21,17 +27,10 @@ logs/
 *~
 .DS_Store
 
-# Audio
-*.mp3
-*.wav
+voice.mp3
+test_*.db
+test_temp*
 
-# Cache
-.pytest_cache/
-.mypy_cache/
-*.egg-info/
-dist/
-build/
-
-# OS
-Thumbs.db
-.DS_Store
+.cache/
+*.sqlite
+*.db-journal
