@@ -1,4 +1,4 @@
-"""Voice assistant with speech recognition and text-to-speech."""
+"""Enhanced voice assistant with speech recognition and TTS."""
 
 import asyncio
 import os
@@ -25,104 +25,116 @@ except ImportError:
 
 
 class VoiceAssistant:
-    """Handle voice input and output with wake word detection."""
+    """Handles voice input and output."""
 
     def __init__(self) -> None:
-        self.recognizer: Optional[sr.Recognizer] = sr.Recognizer() if sr else None
-        self.wake_word = Config.voice.wake_word.lower()
-        self.enable_wake_word = Config.voice.enable_wake_word
-        self.voice_name = Config.voice.voice_name
-        self.mic_device_index = Config.voice.mic_device_index
+        self.recognizer = None
+        self.mic_index = Config.voice.mic_device_index
+        self._init_voice()
+
+    def _init_voice(self) -> None:
+        """Initialize voice components."""
+        if sr:
+            try:
+                self.recognizer = sr.Recognizer()
+                logger.info("Speech recognizer initialized")
+            except Exception as e:
+                logger.warning(f"Speech recognizer initialization failed: {e}")
 
         if pygame:
-            pygame.mixer.init()
-        logger.info("VoiceAssistant initialized")
-
-    async def _speak_async(self, text: str) -> None:
-        """Generate speech asynchronously."""
-        if not edge_tts:
-            logger.warning("edge_tts not installed")
-            return
-
-        try:
-            communicate = edge_tts.Communicate(text, self.voice_name)
-            await communicate.save("voice.mp3")
-        except Exception as e:
-            logger.error(f"Failed to generate speech: {e}")
+            try:
+                pygame.mixer.init()
+                logger.info("Audio mixer initialized")
+            except Exception as e:
+                logger.warning(f"Audio mixer initialization failed: {e}")
 
     def speak(self, text: str) -> None:
-        """Speak text using text-to-speech."""
-        if not text:
-            return
-
-        logger.info(f"{Config.assistant_name}: {text}")
-        print(f"{Config.assistant_name}: {text}")
-
-        if not edge_tts or not pygame:
-            logger.warning("Text-to-speech dependencies not available")
+        """Convert text to speech."""
+        if not text or not edge_tts or not pygame:
+            if not edge_tts:
+                logger.warning("edge_tts not available")
+            if not pygame:
+                logger.warning("pygame not available")
             return
 
         try:
+            logger.info(f"Speaking: {text[:50]}...")
             asyncio.run(self._speak_async(text))
-            pygame.mixer.music.load("voice.mp3")
-            pygame.mixer.music.play()
-
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
-
-            pygame.mixer.music.unload()
         except Exception as e:
-            logger.error(f"Speech playback failed: {e}")
+            logger.error(f"Speech error: {e}")
         finally:
             if os.path.exists("voice.mp3"):
-                os.remove("voice.mp3")
+                try:
+                    os.remove("voice.mp3")
+                except Exception as e:
+                    logger.warning(f"Failed to remove temp audio file: {e}")
 
-    def listen(self, timeout: int = 10) -> str:
-        """Listen for voice input."""
-        if not self.recognizer or not sr:
+    @staticmethod
+    async def _speak_async(text: str) -> None:
+        """Async TTS generation and playback."""
+        try:
+            communicate = edge_tts.Communicate(text, Config.voice.voice_name)
+            await communicate.save("voice.mp3")
+
+            if pygame and pygame.mixer:
+                pygame.mixer.music.load("voice.mp3")
+                pygame.mixer.music.play()
+                
+                while pygame.mixer.music.get_busy():
+                    pygame.time.Clock().tick(10)
+                
+                pygame.mixer.music.unload()
+        except Exception as e:
+            logger.error(f"Async speech error: {e}")
+
+    def listen(self, timeout: int = 10, phrase_time_limit: int = 10) -> Optional[str]:
+        """Listen for user input via microphone."""
+        if not sr or not self.recognizer:
             logger.warning("Speech recognition not available")
-            return ""
+            return None
 
         try:
             # Auto-detect microphone if not specified
-            device_index = None if self.mic_device_index == -1 else self.mic_device_index
-
-            with sr.Microphone(device_index=device_index) as source:
-                logger.debug("Listening...")
+            mic_index = self.mic_index if self.mic_index >= 0 else None
+            
+            with sr.Microphone(device_index=mic_index) as source:
+                logger.info("Listening...")
                 self.recognizer.adjust_for_ambient_noise(source, duration=1)
                 audio = self.recognizer.listen(
                     source,
                     timeout=timeout,
-                    phrase_time_limit=timeout
+                    phrase_time_limit=phrase_time_limit
                 )
+
+            try:
+                command = self.recognizer.recognize_google(audio)
+                logger.info(f"Recognized: {command}")
+                return command
+            except sr.UnknownValueError:
+                logger.warning("Could not understand audio")
+                return None
+            except sr.RequestError as e:
+                logger.error(f"Google API error: {e}")
+                return None
+
         except sr.RequestError as e:
             logger.error(f"Microphone error: {e}")
-            return ""
-        except sr.UnknownValueError:
-            logger.debug("Could not understand audio")
-            return ""
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error during listening: {e}")
+            return None
+
+    @staticmethod
+    def list_microphones() -> list:
+        """List available microphones."""
+        if not sr:
+            logger.warning("Speech recognition not available")
+            return []
 
         try:
-            command = self.recognizer.recognize_google(audio)
-            logger.info(f"You: {command}")
-            print(f"You: {command}")
-            return command
-        except sr.RequestError as e:
-            logger.error(f"Google API error: {e}")
-            return ""
-        except sr.UnknownValueError:
-            logger.debug("Could not understand audio")
-            return ""
-
-    def process_wake_word(self, text: str) -> Optional[str]:
-        """Check for wake word and return the command without it."""
-        if not self.enable_wake_word or not self.wake_word:
-            return text
-
-        text_lower = text.lower()
-        if self.wake_word in text_lower:
-            # Remove wake word
-            idx = text_lower.find(self.wake_word)
-            command = (text[:idx] + text[idx + len(self.wake_word):]).strip()
-            return command if command else None
-        return None
+            mics = sr.Microphone.list_microphone_names()
+            logger.info(f"Found {len(mics)} microphones")
+            return list(enumerate(mics))
+        except Exception as e:
+            logger.error(f"Failed to list microphones: {e}")
+            return []

@@ -1,7 +1,7 @@
-"""Advanced multi-model AI brain for JARVIS."""
+"""Advanced AI brain supporting multiple models with fallback."""
 
 import copy
-from typing import List, Dict, Optional
+from typing import Optional, List, Dict
 from core.logger import Logger
 from core.config_manager import Config
 
@@ -24,7 +24,7 @@ except ImportError:
 
 
 class AIBrain:
-    """Multi-model AI with Gemini (primary), OpenAI (backup), and Ollama (offline)."""
+    """Multi-model AI system with automatic fallback."""
 
     def __init__(self) -> None:
         self.history: List[Dict[str, str]] = [
@@ -33,151 +33,148 @@ class AIBrain:
                 "content": f"You are {Config.assistant_name}, a helpful digital assistant for {Config.user_name}. Keep responses clear, polite, and useful."
             }
         ]
-        self.gemini_client = self._init_gemini()
-        self.openai_client = self._init_openai()
-        self.ollama_available = self._check_ollama()
-        logger.info("AIBrain initialized")
+        self.gemini_client = None
+        self.openai_client = None
+        self._init_clients()
 
-    @staticmethod
-    def _init_gemini() -> Optional[object]:
-        """Initialize Gemini client."""
-        if not genai or not Config.api.gemini_key:
-            logger.debug("Gemini not available")
-            return None
-        try:
-            genai.configure(api_key=Config.api.gemini_key)
-            logger.info("Gemini client initialized")
-            return genai
-        except Exception as e:
-            logger.error(f"Failed to initialize Gemini: {e}")
-            return None
+    def _init_clients(self) -> None:
+        """Initialize AI clients."""
+        if genai and Config.api.gemini_key:
+            try:
+                self.gemini_client = genai.Client(api_key=Config.api.gemini_key)
+                logger.info("Gemini client initialized")
+            except Exception as e:
+                logger.warning(f"Gemini initialization failed: {e}")
 
-    @staticmethod
-    def _init_openai() -> Optional[OpenAI]:
-        """Initialize OpenAI client."""
-        if not OpenAI or not Config.api.openai_key:
-            logger.debug("OpenAI not available")
-            return None
-        try:
-            client = OpenAI(api_key=Config.api.openai_key)
-            logger.info("OpenAI client initialized")
-            return client
-        except Exception as e:
-            logger.error(f"Failed to initialize OpenAI: {e}")
-            return None
-
-    @staticmethod
-    def _check_ollama() -> bool:
-        """Check if Ollama is available."""
-        if not requests:
-            return False
-        try:
-            response = requests.get(f"{Config.ai.ollama_url}/api/tags", timeout=2)
-            available = response.status_code == 200
-            if available:
-                logger.info("Ollama is available")
-            return available
-        except Exception:
-            logger.debug("Ollama not available")
-            return False
+        if OpenAI and Config.api.openai_key:
+            try:
+                self.openai_client = OpenAI(api_key=Config.api.openai_key)
+                logger.info("OpenAI client initialized")
+            except Exception as e:
+                logger.warning(f"OpenAI initialization failed: {e}")
 
     def ask(self, prompt: str) -> str:
-        """Ask the AI a question."""
+        """Process user prompt and return response."""
         if not prompt or not prompt.strip():
             return "Please say something so I can help."
 
         self.history.append({"role": "user", "content": prompt.strip()})
-        response = self._generate_response()
-        self.history.append({"role": "assistant", "content": response})
-
-        # Keep history manageable
-        if len(self.history) > Config.ai.max_history:
-            self.history = self.history[:1] + self.history[-(Config.ai.max_history - 1):]
-
-        return response
+        
+        try:
+            response = self._generate_response()
+            self.history.append({"role": "assistant", "content": response})
+            
+            # Keep history manageable
+            if len(self.history) > Config.ai.max_history:
+                self.history = self.history[:1] + self.history[-(Config.ai.max_history - 1):]
+            
+            return response
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            return f"I encountered an error: {str(e)}"
 
     def _generate_response(self) -> str:
-        """Generate response using available models."""
-        try:
-            # Try Gemini first
-            if self.gemini_client:
-                return self._ask_gemini()
+        """Generate response using available AI models."""
+        # Try Gemini first
+        if self.gemini_client:
+            try:
+                response = self._ask_gemini(self.history)
+                if response:
+                    return response
+            except Exception as e:
+                logger.warning(f"Gemini error: {e}")
 
-            # Fall back to OpenAI
-            if self.openai_client:
-                return self._ask_openai()
+        # Fall back to OpenAI
+        if self.openai_client:
+            try:
+                response = self._ask_openai(self.history)
+                if response:
+                    return response
+            except Exception as e:
+                logger.warning(f"OpenAI error: {e}")
 
-            # Fall back to Ollama
-            if self.ollama_available:
-                return self._ask_ollama()
+        # Try Ollama for offline mode
+        if requests:
+            try:
+                response = self._ask_ollama(self.history)
+                if response:
+                    return response
+            except Exception as e:
+                logger.warning(f"Ollama error: {e}")
 
-            return "AI is not configured. Please set up API keys or Ollama."
-        except Exception as e:
-            logger.error(f"Response generation failed: {e}")
-            return f"Error: {e}"
+        return "I'm not configured properly. Please set up API keys or Ollama."
 
-    def _ask_gemini(self) -> str:
+    @staticmethod
+    def _ask_gemini(history: List[Dict[str, str]]) -> Optional[str]:
         """Query Gemini API."""
         try:
-            model = self.gemini_client.GenerativeModel("gemini-1.5-flash")
-            response = model.generate_content(
-                self.history[-1]["content"],
-                generation_config={
-                    "max_output_tokens": 1000,
-                    "temperature": 0.7,
-                }
-            )
-            text = response.text if response else "No response"
-            logger.debug("Gemini response generated")
-            return text.strip()
-        except Exception as e:
-            logger.warning(f"Gemini failed: {e}")
-            raise
+            if not genai:
+                return None
+            
+            # Build prompt from history
+            recent = history[-6:]
+            prompt_parts = []
+            for m in recent:
+                prompt_parts.append(f"{m['role'].upper()}: {m['content']}")
+            prompt = "\n".join(prompt_parts)
 
-    def _ask_openai(self) -> str:
+            response = genai.Client().models.generate_content(
+                model="gemini-1.5-flash",
+                contents=prompt
+            )
+            text = getattr(response, "text", None)
+            return str(text).strip() if text else None
+        except Exception as e:
+            logger.error(f"Gemini API error: {e}")
+            return None
+
+    @staticmethod
+    def _ask_openai(history: List[Dict[str, str]]) -> Optional[str]:
         """Query OpenAI API."""
         try:
-            response = self.openai_client.chat.completions.create(
+            if not OpenAI:
+                return None
+
+            client = OpenAI(api_key=Config.api.openai_key)
+            response = client.chat.completions.create(
                 model="gpt-3.5-turbo",
-                messages=self.history[-5:],  # Use last 5 messages for context
-                max_tokens=1000,
+                messages=history,
+                max_tokens=600,
                 temperature=0.7,
             )
-            text = response.choices[0].message.content
-            logger.debug("OpenAI response generated")
-            return text.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
-            logger.warning(f"OpenAI failed: {e}")
-            raise
+            logger.error(f"OpenAI API error: {e}")
+            return None
 
-    def _ask_ollama(self) -> str:
-        """Query Ollama (offline mode)."""
+    @staticmethod
+    def _ask_ollama(history: List[Dict[str, str]]) -> Optional[str]:
+        """Query Ollama API for offline mode."""
         try:
-            # Get last user message
-            user_message = self.history[-1]["content"]
+            if not requests:
+                return None
+
+            url = f"{Config.ai.ollama_url}/api/chat"
+            payload = {
+                "model": "mistral",
+                "messages": history,
+                "stream": False
+            }
             
-            response = requests.post(
-                f"{Config.ai.ollama_url}/api/generate",
-                json={
-                    "model": "mistral",
-                    "prompt": user_message,
-                    "stream": False,
-                },
-                timeout=Config.ai.model_timeout,
-            )
-            data = response.json()
-            text = data.get("response", "No response")
-            logger.debug("Ollama response generated")
-            return text.strip()
+            response = requests.post(url, json=payload, timeout=Config.ai.model_timeout)
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("message", {}).get("content", "").strip()
+            return None
         except Exception as e:
-            logger.warning(f"Ollama failed: {e}")
-            raise
+            logger.error(f"Ollama API error: {e}")
+            return None
 
     def clear_history(self) -> None:
         """Clear conversation history."""
         self.history = self.history[:1]  # Keep system message
-        logger.debug("Conversation history cleared")
+        logger.info("Conversation history cleared")
 
     def get_history(self) -> List[Dict[str, str]]:
-        """Get conversation history."""
-        return copy.deepcopy(self.history[1:])  # Exclude system message
+        """Get current conversation history."""
+        return copy.deepcopy(self.history)
