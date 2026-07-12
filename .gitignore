@@ -1,0 +1,37 @@
+# Environment
+.env
+.env.local
+*.pyc
+__pycache__/
+
+# Data
+data/
+*.db
+*.db-journal
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Audio
+*.mp3
+*.wav
+
+# Cache
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# OS
+Thumbs.db
+.DS_Store
